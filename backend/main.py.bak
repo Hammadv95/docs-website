@@ -10,7 +10,6 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Resp
 from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from slugify import slugify
-import logging
 
 load_dotenv()
 
@@ -27,8 +26,6 @@ JWT_EXPIRES_MIN = int(os.environ.get("ADMIN_JWT_EXPIRES_MIN", "720"))
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI(title="Docs Website API")
-logger = logging.getLogger("uvicorn.error")
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -130,11 +127,8 @@ async def meili_setup() -> None:
 
 @app.on_event("startup")
 async def _startup():
-    try:
-            await meili_setup()
+    await meili_setup()
 
-    except Exception as e:
-        logger.exception("Startup failed (continuing anyway): %s", e)
 async def meili_upsert(doc: dict) -> None:
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(
