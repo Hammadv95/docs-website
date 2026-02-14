@@ -39,33 +39,26 @@ async def set_meili_filterable():
     if not MEILI_URL or not MEILI_KEY:
         raise HTTPException(500, "MEILI_URL or MEILI_MASTER_KEY missing")
 
-    # try both endpoint spellings (some versions differ)
-    candidate_urls = [
-        f"{MEILI_URL}/indexes/documents/settings/filterable-attributes",
-        f"{MEILI_URL}/indexes/documents/settings/filterableAttributes",
-    ]
-
-    # send BOTH auth styles (covers all Meili setups)
+    url = f"{MEILI_URL}/indexes/documents/settings"
     headers = {
         "Authorization": f"Bearer {MEILI_KEY}",
         "X-Meili-API-Key": MEILI_KEY,
         "Content-Type": "application/json",
     }
 
-    results = []
+    payload = {
+        "filterableAttributes": ["is_published"]
+    }
+
     async with httpx.AsyncClient(timeout=20) as client:
-        for url in candidate_urls:
-            r = await client.post(url, headers=headers, json=["is_published"])
-            results.append({
-                "url": url,
-                "status_code": r.status_code,
-                "text": r.text[:1000],  # keep it short
-            })
+        r = await client.patch(url, headers=headers, json=payload)
 
     return {
-        "meili_url_env": MEILI_URL,
-        "results": results
+        "url": url,
+        "status_code": r.status_code,
+        "text": r.text[:2000],
     }
+
 
 logger = logging.getLogger("uvicorn.error")
 
