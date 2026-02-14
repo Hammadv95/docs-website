@@ -173,9 +173,9 @@ async def meili_search(q: str, limit: int = 20) -> dict:
             f"{MEILI_URL}/indexes/{MEILI_INDEX}/search",
             headers=meili_headers(),
             json={
-                "q": q,
-                "limit": limit
-                # REMOVE FILTER FOR NOW
+                 "q": q,
+                 "limit": limit,
+                 "filter": "is_published = true"
             },
         )
         r.raise_for_status()
