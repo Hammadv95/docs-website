@@ -36,28 +36,36 @@ MEILI_KEY = os.getenv("MEILI_MASTER_KEY", "")
 
 @app.get("/admin/meili/set-filterable")
 async def set_meili_filterable():
-    """
-    One-time setup:
-    Makes `is_published` filterable so your search filter works.
-    """
     if not MEILI_URL or not MEILI_KEY:
-        raise HTTPException(500, "MEILI_URL or MEILI_MASTER_KEY is missing in env vars")
+        raise HTTPException(500, "MEILI_URL or MEILI_MASTER_KEY missing")
 
-    url = f"{MEILI_URL}/indexes/documents/settings/filterable-attributes"
-    headers = {"Authorization": f"Bearer {MEILI_KEY}", "Content-Type": "application/json"}
+    # try both endpoint spellings (some versions differ)
+    candidate_urls = [
+        f"{MEILI_URL}/indexes/documents/settings/filterable-attributes",
+        f"{MEILI_URL}/indexes/documents/settings/filterableAttributes",
+    ]
 
+    # send BOTH auth styles (covers all Meili setups)
+    headers = {
+        "Authorization": f"Bearer {MEILI_KEY}",
+        "X-Meili-API-Key": MEILI_KEY,
+        "Content-Type": "application/json",
+    }
+
+    results = []
     async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.post(url, headers=headers, json=["is_published"])
+        for url in candidate_urls:
+            r = await client.post(url, headers=headers, json=["is_published"])
+            results.append({
+                "url": url,
+                "status_code": r.status_code,
+                "text": r.text[:1000],  # keep it short
+            })
 
-    try:
-        body = r.json()
-    except Exception:
-        body = r.text
-
-    if r.status_code >= 400:
-        raise HTTPException(r.status_code, {"url": url, "meili_response": body})
-
-    return {"url": url, "status": r.status_code, "meili_response": body}
+    return {
+        "meili_url_env": MEILI_URL,
+        "results": results
+    }
 
 logger = logging.getLogger("uvicorn.error")
 
