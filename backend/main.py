@@ -27,6 +27,38 @@ JWT_EXPIRES_MIN = int(os.environ.get("ADMIN_JWT_EXPIRES_MIN", "720"))
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI(title="Docs Website API")
+import os
+import httpx
+from fastapi import HTTPException
+
+MEILI_URL = os.getenv("MEILI_URL", "").rstrip("/")
+MEILI_KEY = os.getenv("MEILI_MASTER_KEY", "")
+
+@app.get("/admin/meili/set-filterable")
+async def set_meili_filterable():
+    """
+    One-time setup:
+    Makes `is_published` filterable so your search filter works.
+    """
+    if not MEILI_URL or not MEILI_KEY:
+        raise HTTPException(500, "MEILI_URL or MEILI_MASTER_KEY is missing in env vars")
+
+    url = f"{MEILI_URL}/indexes/documents/settings/filterable-attributes"
+    headers = {"Authorization": f"Bearer {MEILI_KEY}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.post(url, headers=headers, json=["is_published"])
+
+    try:
+        body = r.json()
+    except Exception:
+        body = r.text
+
+    if r.status_code >= 400:
+        raise HTTPException(r.status_code, {"url": url, "meili_response": body})
+
+    return {"url": url, "status": r.status_code, "meili_response": body}
+
 logger = logging.getLogger("uvicorn.error")
 
 
