@@ -1,4 +1,6 @@
-﻿import os, time, hashlib
+﻿import os
+import time
+import hashlib
 import uuid
 from typing import Optional, Dict, List
 
@@ -14,6 +16,16 @@ import logging
 
 load_dotenv()
 
+# ---------------- Required env vars (used by /admin/env-check) ----------------
+REQUIRED_ENV_VARS = [
+    "SUPABASE_URL",
+    "SUPABASE_SERVICE_ROLE_KEY",
+    "MEILI_URL",
+    "MEILI_MASTER_KEY",
+    "ADMIN_JWT_SECRET",
+]
+
+# ---------------- Core config ----------------
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
 
@@ -27,41 +39,8 @@ JWT_EXPIRES_MIN = int(os.environ.get("ADMIN_JWT_EXPIRES_MIN", "720"))
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI(title="Docs Website API")
-import os
-import httpx
-from fastapi import HTTPException
-
-MEILI_URL = os.getenv("MEILI_URL", "").rstrip("/")
-MEILI_KEY = os.getenv("MEILI_MASTER_KEY", "")
-
-@app.get("/admin/meili/set-filterable")
-async def set_meili_filterable():
-    if not MEILI_URL or not MEILI_KEY:
-        raise HTTPException(500, "MEILI_URL or MEILI_MASTER_KEY missing")
-
-    url = f"{MEILI_URL}/indexes/documents/settings"
-    headers = {
-        "Authorization": f"Bearer {MEILI_KEY}",
-        "X-Meili-API-Key": MEILI_KEY,
-        "Content-Type": "application/json",
-    }
-
-    payload = {
-        "filterableAttributes": ["is_published"]
-    }
-
-    async with httpx.AsyncClient(timeout=20) as client:
-        r = await client.patch(url, headers=headers, json=payload)
-
-    return {
-        "url": url,
-        "status_code": r.status_code,
-        "text": r.text[:2000],
-    }
-
 
 logger = logging.getLogger("uvicorn.error")
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -85,7 +64,7 @@ async def sb_select_one(table: str, query: str) -> Optional[dict]:
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.get(url, headers=sb_headers())
         if r.status_code >= 400:
-            raise HTTPException(status_code=500, detail=f"Supabase Storage error {r.status_code}: {r.text}")
+            raise HTTPException(status_code=500, detail=f"Supabase REST error {r.status_code}: {r.text}")
         data = r.json()
         return data[0] if data else None
 
@@ -112,7 +91,6 @@ async def sb_update_by_id(table: str, row_id: str, payload: dict) -> dict:
 
 # ---------------- Supabase Storage helpers ----------------
 async def sb_storage_upload(bucket: str, path: str, content: bytes, content_type: str) -> None:
-    # Use PUT upload. This is the most reliable for Supabase Storage object uploads.
     url = f"{SUPABASE_URL}/storage/v1/object/{bucket}/{path}"
     headers = {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -126,7 +104,6 @@ async def sb_storage_upload(bucket: str, path: str, content: bytes, content_type
             raise HTTPException(status_code=500, detail=f"Supabase Storage upload error {r.status_code}: {r.text}")
 
 async def sb_storage_download(bucket: str, path: str) -> bytes:
-    # Private buckets require the authenticated download endpoint
     url = f"{SUPABASE_URL}/storage/v1/object/authenticated/{bucket}/{path}"
     headers = {
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -138,41 +115,54 @@ async def sb_storage_download(bucket: str, path: str) -> bytes:
             raise HTTPException(status_code=500, detail=f"Supabase Storage download error {r.status_code}: {r.text}")
         return r.content
 
-
 # ---------------- Meilisearch helpers ----------------
+def meili_headers() -> Dict[str, str]:
+    # Provide both styles; Meili accepts X-Meili-API-Key, and most setups accept Authorization Bearer.
+    return {
+        "Authorization": f"Bearer {MEILI_MASTER_KEY}",
+        "X-Meili-API-Key": MEILI_MASTER_KEY,
+        "Content-Type": "application/json",
+    }
+
 async def meili_setup() -> None:
     async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{MEILI_URL}/indexes/{MEILI_INDEX}", headers={"Authorization": f"Bearer {MEILI_MASTER_KEY}"})
+        # Create index if missing
+        r = await client.get(f"{MEILI_URL}/indexes/{MEILI_INDEX}", headers=meili_headers())
         if r.status_code == 404:
             cr = await client.post(
                 f"{MEILI_URL}/indexes",
-                headers={"Authorization": f"Bearer {MEILI_MASTER_KEY}"},
+                headers=meili_headers(),
                 json={"uid": MEILI_INDEX, "primaryKey": "id"},
             )
             cr.raise_for_status()
+        elif r.status_code >= 400:
+            r.raise_for_status()
 
-        await client.put(
+        # Set index settings (reliable endpoint)
+        sr = await client.put(
             f"{MEILI_URL}/indexes/{MEILI_INDEX}/settings",
-            headers={"Authorization": f"Bearer {MEILI_MASTER_KEY}"},
+            headers=meili_headers(),
             json={
                 "searchableAttributes": ["title", "summary", "content"],
                 "filterableAttributes": ["is_published"],
                 "sortableAttributes": ["updated_at"],
             },
         )
+        sr.raise_for_status()
 
 @app.on_event("startup")
 async def _startup():
     try:
-            await meili_setup()
-
+        await meili_setup()
+        logger.info("Meili setup complete")
     except Exception as e:
-        logger.exception("Startup failed (continuing anyway): %s", e)
+        logger.exception("Startup Meili setup failed (continuing anyway): %s", e)
+
 async def meili_upsert(doc: dict) -> None:
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(
             f"{MEILI_URL}/indexes/{MEILI_INDEX}/documents",
-            headers={"Authorization": f"Bearer {MEILI_MASTER_KEY}"},
+            headers=meili_headers(),
             json=[doc],
         )
         r.raise_for_status()
@@ -181,11 +171,17 @@ async def meili_search(q: str, limit: int = 20) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(
             f"{MEILI_URL}/indexes/{MEILI_INDEX}/search",
-            headers={"Authorization": f"Bearer {MEILI_MASTER_KEY}"},
+            headers=meili_headers(),
             json={"q": q, "limit": limit, "filter": "is_published = true"},
         )
         r.raise_for_status()
         return r.json()
+
+# ---------------- Optional: manual one-time setup trigger ----------------
+@app.get("/admin/meili/setup")
+async def admin_meili_setup():
+    await meili_setup()
+    return {"ok": True, "index": MEILI_INDEX, "meili_url": MEILI_URL}
 
 # ---------------- Auth helpers ----------------
 def make_admin_token(email: str) -> str:
@@ -244,8 +240,17 @@ async def search(q: str, limit: int = 20):
     q = (q or "").strip()
     if not q:
         return {"query": q, "hits": [], "estimatedTotalHits": 0}
+
     res = await meili_search(q, limit=limit)
-    hits = [{"slug": h["slug"], "title": h["title"], "summary": h.get("summary",""), "updated_at": h.get("updated_at")} for h in res.get("hits", [])]
+    hits = [
+        {
+            "slug": h["slug"],
+            "title": h["title"],
+            "summary": h.get("summary", ""),
+            "updated_at": h.get("updated_at"),
+        }
+        for h in res.get("hits", [])
+    ]
     return {"query": q, "hits": hits, "estimatedTotalHits": res.get("estimatedTotalHits", 0)}
 
 @app.get("/api/docs")
@@ -266,6 +271,7 @@ async def view_pdf(slug: str):
     row = await sb_select_one("documents", f"?select=storage_path,title,is_published&slug=eq.{slug}&limit=1")
     if not row or not row.get("is_published"):
         raise HTTPException(status_code=404, detail="Not found")
+
     pdf_bytes = await sb_storage_download("docs", row["storage_path"])
     return Response(
         content=pdf_bytes,
@@ -329,8 +335,6 @@ async def admin_upload(
     else:
         doc_id = str(uuid.uuid4())
         storage_path = f"{doc_id}.pdf"
-
-        # Upload first so storage_path is never TEMP
         await sb_storage_upload("docs", storage_path, pdf_bytes, "application/pdf")
 
         doc_row = await sb_insert("documents", {
@@ -345,15 +349,16 @@ async def admin_upload(
             "extracted_text": extracted,
             "updated_at": now_iso,
         })
+
     await meili_upsert({
-            "id": doc_row["id"],
-            "slug": doc_row["slug"],
-            "title": doc_row["title"],
-            "summary": doc_row.get("summary", ""),
-            "updated_at": doc_row.get("updated_at"),
-            "is_published": bool(doc_row.get("is_published", True)),
-            "content": doc_row.get("extracted_text", ""),
-        })
+        "id": doc_row["id"],
+        "slug": doc_row["slug"],
+        "title": doc_row["title"],
+        "summary": doc_row.get("summary", ""),
+        "updated_at": doc_row.get("updated_at"),
+        "is_published": bool(doc_row.get("is_published", True)),
+        "content": doc_row.get("extracted_text", ""),
+    })
 
     return {"ok": True, "slug": doc_row["slug"], "url": f"/docs/{doc_row['slug']}"}
 
@@ -385,7 +390,7 @@ async def admin_reindex(authorization: Optional[str] = Header(None)):
             if len(batch) >= 100:
                 resp = await client.post(
                     f"{MEILI_URL}/indexes/{MEILI_INDEX}/documents",
-                    headers={"Authorization": f"Bearer {MEILI_MASTER_KEY}"},
+                    headers=meili_headers(),
                     json=batch,
                 )
                 resp.raise_for_status()
@@ -395,7 +400,7 @@ async def admin_reindex(authorization: Optional[str] = Header(None)):
         if batch:
             resp = await client.post(
                 f"{MEILI_URL}/indexes/{MEILI_INDEX}/documents",
-                headers={"Authorization": f"Bearer {MEILI_MASTER_KEY}"},
+                headers=meili_headers(),
                 json=batch,
             )
             resp.raise_for_status()
@@ -403,11 +408,7 @@ async def admin_reindex(authorization: Optional[str] = Header(None)):
 
     return {"ok": True, "pushed": pushed}
 
-
-
 @app.get("/admin/env-check")
 def env_check():
     # Returns True/False for presence (does NOT leak secrets)
     return {var: bool(os.getenv(var)) for var in REQUIRED_ENV_VARS}
-
-
