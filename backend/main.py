@@ -365,21 +365,30 @@ async def admin_upload(
     })
 
     return {"ok": True, "slug": doc_row["slug"], "url": f"/docs/{doc_row['slug']}"}
-# ---------------- Admin: Set filterable attributes ----------------
 @app.get("/admin/meili/set-filterable-is-published")
 async def set_filterable_is_published():
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.put(
-            f"{MEILI_URL}/indexes/{MEILI_INDEX}/settings",
-            headers=meili_headers(),
-            json={
-                "filterableAttributes": ["is_published"]
-            },
-        )
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.put(
+                f"{MEILI_URL}/indexes/{MEILI_INDEX}/settings",
+                headers=meili_headers(),
+                json={"filterableAttributes": ["is_published"]},
+            )
+
+        # IMPORTANT: don't assume JSON; return raw text always
         return {
+            "meili_url": MEILI_URL,
+            "index": MEILI_INDEX,
             "status_code": r.status_code,
-            "response": r.json()
+            "text": (r.text or "")[:2000],
         }
+    except Exception as e:
+        return {
+            "meili_url": MEILI_URL,
+            "index": MEILI_INDEX,
+            "error": repr(e),
+        }
+
 
 # ---------------- Admin: Reindex all docs into Meilisearch ----------------
 @app.post("/admin/reindex")
