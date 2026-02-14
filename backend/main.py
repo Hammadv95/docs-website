@@ -172,7 +172,11 @@ async def meili_search(q: str, limit: int = 20) -> dict:
         r = await client.post(
             f"{MEILI_URL}/indexes/{MEILI_INDEX}/search",
             headers=meili_headers(),
-            json={"q": q, "limit": limit, "filter": "is_published = true"},
+            json={
+                "q": q,
+                "limit": limit
+                # REMOVE FILTER FOR NOW
+            },
         )
         r.raise_for_status()
         return r.json()
