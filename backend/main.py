@@ -1,9 +1,9 @@
-﻿import os
+from pydantic import BaseModel
+import os
 import time
 import hashlib
 import uuid
-from typing import Optional, Dict, List
-
+from typing import Dict
 import fitz  # PyMuPDF
 import httpx
 import jwt
@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from passlib.context import CryptContext
 from slugify import slugify
 import logging
+from typing import Optional, List, Literal
+import uuid
 
 load_dotenv()
 
@@ -296,6 +298,7 @@ async def admin_upload(
     title: str = Form(...),
     slug: Optional[str] = Form(None),
     summary: str = Form(""),
+    doc_type: str = Form("state_regulation"),
     pdf: UploadFile = File(...),
 ):
     require_admin(authorization)
@@ -331,6 +334,7 @@ async def admin_upload(
             "storage_path": storage_path,
             "sha256": digest,
             "file_size": len(pdf_bytes),
+            "doc_type": doc_type,
             "extracted_text": extracted,
             "updated_at": now_iso,
             "is_published": True,
@@ -346,6 +350,7 @@ async def admin_upload(
             "slug": computed_slug,
             "title": title,
             "summary": summary,
+            "doc_type": doc_type,
             "is_published": True,
             "storage_path": storage_path,
             "sha256": digest,
@@ -432,3 +437,66 @@ async def admin_reindex(authorization: Optional[str] = Header(None)):
 def env_check():
     # Returns True/False for presence (does NOT leak secrets)
     return {var: bool(os.getenv(var)) for var in REQUIRED_ENV_VARS}
+
+class FAQCreate(BaseModel):
+    question: str
+    answer: str
+    category: Optional[str] = None
+    display_order: Optional[int] = 0
+    is_published: Optional[bool] = True
+
+class FAQUpdate(BaseModel):
+    question: Optional[str] = None
+    answer: Optional[str] = None
+    category: Optional[str] = None
+    display_order: Optional[int] = None
+    is_published: Optional[bool] = None
+
+# =====================================================
+# FAQ ENDPOINTS
+# =====================================================
+
+@app.get("/api/faqs")
+async def get_faqs(category: Optional[str] = None):
+    """Get all published FAQs"""
+    query = "?select=*&is_published=eq.true&order=display_order.asc"
+    if category:
+        query += f"&category=eq.{category}"
+    rows = await sb_list("faqs", query)
+    return {"faqs": rows}
+
+@app.post("/admin/faqs")
+async def create_faq(
+    authorization: Optional[str] = Header(None),
+    question: str = Form(...),
+    answer: str = Form(...),
+    category: Optional[str] = Form(None),
+    display_order: int = Form(0),
+):
+    """Create a new FAQ (admin only)"""
+    require_admin(authorization)
+    now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    faq_row = await sb_insert("faqs", {
+        "id": str(uuid.uuid4()),
+        "question": question,
+        "answer": answer,
+        "category": category,
+        "display_order": display_order,
+        "is_published": True,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+    })
+    return {"ok": True, "faq": faq_row}
+
+@app.get("/api/docs/type/{doc_type}")
+async def list_docs_by_type(doc_type: str):
+    """Get documents by type"""
+    if doc_type not in ["state_regulation", "pms_report_requests"]:
+        raise HTTPException(status_code=400, detail="Invalid doc_type")
+    rows = await sb_list(
+        "documents",
+        f"?select=slug,title,summary,updated_at,doc_type&is_published=eq.true&doc_type=eq.{doc_type}&order=updated_at.desc"
+    )
+    return {"docs": rows}
+
+    
