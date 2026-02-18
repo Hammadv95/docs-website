@@ -260,8 +260,13 @@ async def search(q: str, limit: int = 20):
     return {"query": q, "hits": hits, "estimatedTotalHits": res.get("estimatedTotalHits", 0)}
 
 @app.get("/api/docs")
-async def list_docs():
-    rows = await sb_list("documents", "?select=slug,title,summary,updated_at&is_published=eq.true&order=updated_at.desc")
+async def list_docs(doc_type: Optional[str] = None):
+    query = "?select=slug,title,summary,updated_at,doc_type&is_published=eq.true&order=updated_at.desc"
+    
+    if doc_type:
+        query += f"&doc_type=eq.{doc_type}"
+    
+    rows = await sb_list("documents", query)
     return {"docs": rows}
 
 @app.get("/api/docs/{slug}")
