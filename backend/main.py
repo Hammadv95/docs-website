@@ -146,7 +146,7 @@ async def meili_setup() -> None:
             headers=meili_headers(),
             json={
                 "searchableAttributes": ["title", "summary", "content"],
-                "filterableAttributes": ["is_published"],
+                "filterableAttributes": ["is_published", "doc_type"],
                 "sortableAttributes": ["updated_at"],
             },
         )
@@ -254,6 +254,7 @@ async def search(q: str, limit: int = 20):
             "title": h["title"],
             "summary": h.get("summary", ""),
             "updated_at": h.get("updated_at"),
+            "doc_type": h.get("doc_type", ""),
         }
         for h in res.get("hits", [])
     ]
@@ -371,6 +372,7 @@ async def admin_upload(
         "summary": doc_row.get("summary", ""),
         "updated_at": doc_row.get("updated_at"),
         "is_published": bool(doc_row.get("is_published", True)),
+        "doc_type": doc_row.get("doc_type", ""),
         "content": doc_row.get("extracted_text", ""),
     })
 
@@ -414,6 +416,7 @@ async def admin_reindex(authorization: Optional[str] = Header(None)):
                 "summary": r.get("summary", "") or "",
                 "updated_at": r.get("updated_at"),
                 "is_published": bool(r.get("is_published", True)),
+                "doc_type": r.get("doc_type", ""),
                 "content": (r.get("extracted_text") or ""),
             })
 
@@ -496,7 +499,7 @@ async def create_faq(
 @app.get("/api/docs/type/{doc_type}")
 async def list_docs_by_type(doc_type: str):
     """Get documents by type"""
-    if doc_type not in ["state_regulation", "pms_report_requests"]:
+    if doc_type not in ["state_regulation", "pms_report_requests", "sop"]:
         raise HTTPException(status_code=400, detail="Invalid doc_type")
     rows = await sb_list(
         "documents",
